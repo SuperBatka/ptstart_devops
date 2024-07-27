@@ -1,0 +1,3 @@
+FROM postgres:15.0
+
+#EXPOSE ${DB_REPL_PORT}

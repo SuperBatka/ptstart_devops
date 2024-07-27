@@ -1,0 +1,82 @@
+services:
+  db:
+    image: 192.168.0.2:5000/db_image
+    container_name: db-image
+    ports:
+      - ${DB_PORT}:5432
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE}
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "listen_addresses=*"
+      - "-c"
+      - "unix_socket_directories=/var/run/postgresql"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "wal_log_hints=on"
+      - "-c"
+      - "password_encryption=scram-sha-256"
+      - "-c"
+      - "log_replication_commands=on"
+      - "-c"
+      - "log_connections=on"
+      - "-c"
+      - "log_disconnections=on"
+    env_file:
+      - .env
+    networks:
+      - ingress
+    restart: always
+  bot:
+    image: 192.168.0.2:5000/bot_image
+    container_name: bot-image  
+    restart: always
+    networks:
+      - ingress    
+    env_file:
+      - .env
+    depends_on:
+      - db
+  db_repl:
+    image: 192.168.0.2:5000/db_repl_image
+    container_name: db-repl-image
+    ports:
+      - ${DB_REPL_PORT}:5432
+    environment:
+      - POSTGRES_USER=${DB_REPL_USER}
+      - POSTGRES_PASSWORD=${DB_REPL_PASSWORD}
+    command: |
+      bash -c "
+      until PGPASSWORD=${DB_REPL_PASSWORD} pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=${DB_HOST} --username=${DB_REPL_USER};
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 5s
+      done
+      echo 'Backup done, starting replica...'
+      chown -R postgres:postgres /var/lib/postgresql/data
+      chmod 0700 /var/lib/postgresql/data
+      su - postgres -c '/usr/lib/postgresql/15/bin/postgres -D /var/lib/postgresql/data'
+      "
+    env_file:
+      - .env
+    depends_on:
+      - db
+    networks:
+      - ingress
+    restart: always
+networks:
+  ingress:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
