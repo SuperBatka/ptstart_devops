@@ -1,0 +1,193 @@
+- name: Install PostgreSQL
+  hosts: db_server, db_repl_server
+  vars_files:
+    - vars.yaml
+  become: yes
+  tasks:
+    - name: Update APT index
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Install PostgreSQL and other packages
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+        state: latest
+- name: Configuration only db_server
+  hosts: db_server
+  vars_files:
+    - vars.yaml
+  become: yes
+  become_user: postgres
+  tasks:
+    - name: Create user for replication
+      postgresql_user:
+        name: "{{ db_repl_user }}"
+        password: "{{ db_repl_password }}"
+        role_attr_flags: REPLICATION
+        state: present
+    - name: Set password postgres
+      postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+    - name: Create DB for Bot
+      postgresql_db:
+        name: "{{ db_name }}"
+        encoding: UTF8
+    - name: Create table emails
+      postgresql_table:
+        db: "{{ db_name }}"
+        name: emails
+        columns:
+          - id serial primary key
+          - email text
+    - name: Create table phone_number
+      postgresql_table:
+        db: "{{ db_name }}"
+        name: phone_number
+        columns:
+          - id serial primary key
+          - phone text
+    - name: Insert into emails test value
+      postgresql_query:
+        db: "{{ db_name }}"
+        query: INSERT INTO emails (email) VALUES ('example@example.com')
+    - name: Insert into numbersphone test value
+      postgresql_query:
+        db: "{{ db_name }}"
+        query: INSERT INTO phone_number (phone) VALUES ('+00000000000')
+- name: Stop PostgreSQL on db_repl_server
+  hosts: db_repl_server
+  become: yes
+  tasks:
+    - name: Stop PostgreSQL
+      service:
+        name: postgresql
+        state: stopped
+    - name: Remove files postgres
+      file:
+        path: /var/lib/postgresql/12/main
+        state: absent
+    - name: Create postgres directory
+      file:
+        path: /var/lib/postgresql/12/main
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+- name: Configuration postgres conf on db_server and db_repl_server
+  hosts: db_server, db_repl_server
+  vars_files:
+    - vars.yaml
+  become: yes
+  become_user: postgres
+  tasks:
+    - name: Write repl user to pg_hba.conf
+      postgresql_pg_hba:
+        dest: /etc/postgresql/12/main/pg_hba.conf
+        contype: host
+        databases: replication
+        address: 0.0.0.0/0
+        method: md5
+        users: "{{ db_repl_user }}"
+        create: true
+    - name: Write postgres user to pg_hba.conf
+      postgresql_pg_hba:
+        dest: /etc/postgresql/12/main/pg_hba.conf
+        contype: host
+        databases: all
+        address: 0.0.0.0/0
+        method: md5
+        users: "{{ db_user }}"
+        create: true
+    - name: Change listen_addresses
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*listen_addresses\s+)\S+'
+        line: "listen_addresses = '*'"
+        state: present
+    - name: Change wal_level
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*wal_level\s+)\S+'
+        line: "wal_level = hot_standby"
+        state: present
+    - name: Change archive_mode 
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*archive_mode\s+)\S+'
+        line: "archive_mode = on"
+        state: present
+    - name: Change archive_command
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*archive_command\s+)\S+'
+        line: "archive_command = 'cd .'"
+        state: present
+    - name: Change max_wal_senders
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*max_wal_senders\s+)\S+'
+        line: "max_wal_senders = 8"
+        state: present
+    - name: Change hot_standby
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*hot_standby\s+)\S+'
+        line: "hot_standby = on"
+        state: present
+    - name: Change log_replication_commands
+      lineinfile:
+        path: /etc/postgresql/12/main/postgresql.conf
+        regexp: '^#?(\s*log_replication_commands\s+)\S+'
+        line: "log_replication_commands = on"
+        state: present
+- name: Restart PostgreSQL on db_server
+  hosts: db_server
+  become: yes
+  tasks:
+    - name: Restart PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
+- name: Replication DB
+  hosts: db_repl_server
+  vars_files:
+    - vars.yaml
+  become: yes
+  tasks:
+    - name: Replication DB
+      become_user: postgres
+      shell: PGPASSWORD="{{ db_repl_password }}" pg_basebackup -P -R -X stream -c fast -h "{{ ip_db_master }}" -U "{{ db_repl_user }}" -D /var/lib/postgresql/12/main
+    - name: Start PostgreSQL
+      service:
+        name: postgresql
+        state: started
+- name: Telegram Bot
+  hosts: db_server
+  become: yes
+  tasks:
+    - name: Update APT index
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Install python
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-psycopg2
+          - python3-paramiko
+          - python3-python-telegram-bot
+          - python3-dotenv
+          - git
+        state: latest
+    - name: Create a directory for telegram
+      file:
+        path: /opt/bot
+        state: directory
+        mode: '0777'
+    - name: Download src from github
+      become: no
+      shell: git clone https://github.com/SuperBatka/ptstart_devops.git /opt/bot

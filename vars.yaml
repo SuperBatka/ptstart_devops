@@ -1,0 +1,6 @@
+db_user: postgres
+db_password: 123
+db_name: db_users
+db_repl_user: repl_user
+db_repl_password: 123
+ip_db_master: 192.168.0.2
